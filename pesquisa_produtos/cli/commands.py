@@ -121,9 +121,15 @@ def search(
     if cep is None:
         cep = _cep_prompt() or None
 
-    listings = asyncio.run(
-        _run_search(query, limit, cep, no_cache, min_price, max_price, condition)
-    )
+    try:
+        listings = asyncio.run(
+            _run_search(query, limit, cep, no_cache, min_price, max_price, condition)
+        )
+    except PermissionError as e:
+        display.print_error(str(e))
+        console.print("\n[dim]Execute [bold]pesquisa-produtos setup[/bold] para configurar.[/dim]")
+        raise typer.Exit(1)
+
     if not listings:
         raise typer.Exit(1)
 
@@ -196,6 +202,66 @@ def cache_clear(
     cm = CacheManager()
     deleted = cm.clear()
     console.print(f"[green]Cache limpo.[/green] {deleted} entradas removidas.")
+
+
+# ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
+
+@app.command()
+def setup():
+    """
+    [bold]Configura as credenciais[/bold] das APIs no arquivo .env.
+
+    A API do Mercado Livre requer um app registrado. Crie gratuitamente em:
+    [link=https://developers.mercadolivre.com.br]https://developers.mercadolivre.com.br[/link]
+    """
+    from pathlib import Path
+
+    env_path = Path(".env")
+
+    console.print(
+        "\n[bold cyan]Configuração das APIs[/bold cyan]\n\n"
+        "A API do Mercado Livre requer autenticação.\n"
+        "Você tem duas opções:\n\n"
+        "  [bold]Opção A[/bold] — App credentials (recomendado, token renovado automaticamente)\n"
+        "    1. Acesse: [link=https://developers.mercadolivre.com.br/pt_br/aplicacoes-detalhe]"
+        "https://developers.mercadolivre.com.br[/link]\n"
+        "    2. Crie um app gratuito\n"
+        "    3. Copie o [bold]App ID[/bold] e o [bold]Secret Key[/bold]\n\n"
+        "  [bold]Opção B[/bold] — Token direto (expira em ~6 horas)\n"
+        "    Obtenha em: https://developers.mercadolivre.com.br/pt_br/api-docs-landing-page\n"
+    )
+
+    choice = Prompt.ask(
+        "Qual opção?",
+        choices=["A", "B", "a", "b"],
+        default="A",
+        console=console,
+    ).upper()
+
+    lines: list[str] = []
+
+    if choice == "A":
+        app_id = Prompt.ask("[cyan]App ID[/cyan]", console=console)
+        secret = Prompt.ask("[cyan]Secret Key[/cyan]", console=console, password=True)
+        lines = [
+            f"ML_APP_ID={app_id}\n",
+            f"ML_APP_SECRET={secret}\n",
+            "CACHE_TTL_SECONDS=3600\n",
+            "CACHE_DIR=data\n",
+        ]
+    else:
+        token = Prompt.ask("[cyan]Access Token[/cyan]", console=console, password=True)
+        lines = [
+            f"ML_ACCESS_TOKEN={token}\n",
+            "CACHE_TTL_SECONDS=3600\n",
+            "CACHE_DIR=data\n",
+        ]
+
+    env_path.write_text("".join(lines), encoding="utf-8")
+    console.print(f"\n[green]Configuração salva em[/green] {env_path.resolve()}")
+    console.print("Agora rode: [bold]pesquisa-produtos search \"notebook gamer\"[/bold]\n")
 
 
 # ---------------------------------------------------------------------------

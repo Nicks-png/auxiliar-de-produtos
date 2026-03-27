@@ -1,8 +1,10 @@
-"""Integração com a API pública do Mercado Livre (MLB - Brasil)."""
+"""Integração com a API do Mercado Livre (MLB - Brasil)."""
 from __future__ import annotations
 
 import os
 from typing import Optional
+
+import httpx
 
 from pesquisa_produtos.models.product import Product, ProductListing, ShippingOption
 from pesquisa_produtos.scrapers.base import BaseScraper
@@ -21,16 +23,47 @@ class MercadoLivreScraper(BaseScraper):
         cache: Optional[CacheManager] = None,
         rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
-        # API pública: 2 req/s sem token, 10 req/s com token
-        token = os.getenv("ML_ACCESS_TOKEN", "")
-        rps = 10.0 if token else 2.0
+        self._token = os.getenv("ML_ACCESS_TOKEN", "")
+        self._app_id = os.getenv("ML_APP_ID", "")
+        self._app_secret = os.getenv("ML_APP_SECRET", "")
+
+        rps = 10.0 if self._token else 2.0
         super().__init__(cache=cache, rate_limiter=rate_limiter or RateLimiter(rps))
-        self._token = token
 
     def _auth_headers(self) -> dict:
         if self._token:
             return {"Authorization": f"Bearer {self._token}"}
         return {}
+
+    async def ensure_token(self) -> None:
+        """Obtém token via client_credentials se APP_ID+SECRET estiverem configurados."""
+        if self._token:
+            return
+        if not (self._app_id and self._app_secret):
+            raise PermissionError(
+                "A API do Mercado Livre requer autenticação.\n\n"
+                "Configure no arquivo .env:\n"
+                "  ML_APP_ID=seu_app_id\n"
+                "  ML_APP_SECRET=seu_app_secret\n\n"
+                "Crie seu app gratuito em: https://developers.mercadolivre.com.br\n"
+                "Ou informe um ML_ACCESS_TOKEN diretamente."
+            )
+
+        client = await self._get_client()
+        resp = await client.post(
+            f"{ML_BASE}/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self._app_id,
+                "client_secret": self._app_secret,
+            },
+        )
+        if resp.status_code != 200:
+            raise PermissionError(
+                f"Falha ao obter token ML (HTTP {resp.status_code}). "
+                "Verifique ML_APP_ID e ML_APP_SECRET no .env."
+            )
+        self._token = resp.json()["access_token"]
 
     async def search(
         self,
@@ -42,16 +75,14 @@ class MercadoLivreScraper(BaseScraper):
         use_cache: bool = True,
     ) -> list[Product]:
         """
-        Busca produtos no Mercado Livre via API pública.
+        Busca produtos no Mercado Livre via API.
 
         Endpoint: GET /sites/MLB/search?q=QUERY&limit=N
         Docs: https://developers.mercadolivre.com.br/pt_br/itens-e-buscas
         """
-        params: dict = {
-            "q": query,
-            "limit": min(limit, 50),  # API aceita no máximo 50
-            "site_id": ML_SITE,
-        }
+        await self.ensure_token()
+
+        params: dict = {"q": query, "limit": min(limit, 50)}
         if min_price is not None:
             params["price_min"] = min_price
         if max_price is not None:
@@ -65,8 +96,7 @@ class MercadoLivreScraper(BaseScraper):
         )
 
         results = data.get("results", [])
-        products = [Product.from_ml_json(item) for item in results]
-        return products
+        return [Product.from_ml_json(item) for item in results]
 
     async def get_shipping(
         self,
@@ -88,7 +118,6 @@ class MercadoLivreScraper(BaseScraper):
                 url, params=params, extra_headers=self._auth_headers(), use_cache=use_cache
             )
         except Exception:
-            # Se falhar (produto sem frete calculável), retorna sem opções
             return ProductListing(product=product)
 
         options = self._parse_shipping_options(data, product.free_shipping)
@@ -103,32 +132,24 @@ class MercadoLivreScraper(BaseScraper):
             days = self._parse_days(option)
             is_free = cost == 0 or free_shipping
 
-            options.append(
-                ShippingOption(method=name, cost=cost, days=days, is_free=is_free)
-            )
+            options.append(ShippingOption(method=name, cost=cost, days=days, is_free=is_free))
 
-        # Frete grátis explícito quando nenhuma opção veio mas o produto tem frete grátis
         if not options and free_shipping:
-            options.append(
-                ShippingOption(method="Padrão ML", cost=0.0, days=0, is_free=True)
-            )
+            options.append(ShippingOption(method="Padrão ML", cost=0.0, days=0, is_free=True))
 
         return sorted(options, key=lambda s: s.cost)
 
     @staticmethod
     def _parse_days(option: dict) -> int:
-        """Extrai o número de dias da estimativa de entrega."""
         estimated = option.get("estimated_delivery_time", {})
         if not estimated:
             return 0
 
         offset = estimated.get("offset", {})
         if offset:
-            # offset.date é dias corridos; convertemos para úteis (aproximado)
             days = offset.get("date", 0)
-            return max(1, int(days * 0.7))  # ~70% de dias corridos = dias úteis
+            return max(1, int(days * 0.7))
 
-        # Fallback: unit / value
         unit = estimated.get("unit", "")
         value = estimated.get("value", 0)
         if unit in ("days", "hours"):

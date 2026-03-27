@@ -12,11 +12,7 @@ from pesquisa_produtos.utils.cache import CacheManager
 from pesquisa_produtos.utils.rate_limiter import RateLimiter
 
 DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "pesquisa-produtos/0.1.0",
     "Accept-Language": "pt-BR,pt;q=0.9",
     "Accept": "application/json",
 }
@@ -62,6 +58,15 @@ class BaseScraper(ABC):
         headers = extra_headers or {}
         response = client.build_request("GET", url, params=params, headers=headers)
         resp = await client.send(response)
+
+        if resp.status_code == 403:
+            raise PermissionError(
+                f"API retornou 403 Forbidden para {url}. "
+                "Configure ML_ACCESS_TOKEN no arquivo .env para autenticar."
+            )
+        if resp.status_code == 429:
+            raise ConnectionError("Rate limit atingido. Aguarde alguns segundos e tente novamente.")
+
         resp.raise_for_status()
         data = resp.json()
 
