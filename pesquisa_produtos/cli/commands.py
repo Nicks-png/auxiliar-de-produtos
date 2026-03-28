@@ -13,7 +13,7 @@ from rich.prompt import Confirm, Prompt
 load_dotenv()  # carrega .env antes de qualquer import que leia os vars
 
 from pesquisa_produtos.models.product import ProductListing
-from pesquisa_produtos.scrapers.mercadolivre import MercadoLivreScraper
+from pesquisa_produtos.scrapers.search import search_all
 from pesquisa_produtos.utils.cache import CacheManager
 from pesquisa_produtos.utils import display
 
@@ -65,33 +65,23 @@ async def _run_search(
     max_price: Optional[float],
     condition: Optional[str],
 ) -> list[ProductListing]:
-    scraper = MercadoLivreScraper()
-    try:
-        with console.status(f"[cyan]Buscando '{query}' no Mercado Livre…[/cyan]"):
-            products = await scraper.search(
-                query,
-                limit=limit,
-                min_price=min_price,
-                max_price=max_price,
-                condition=condition,
-                use_cache=not no_cache,
-            )
+    stores = "Mercado Livre + Magazine Luiza"
+    with console.status(f"[cyan]Buscando '{query}' em {stores}…[/cyan]"):
+        listings = await search_all(
+            query=query,
+            limit_per_store=limit,
+            cep=cep,
+            min_price=min_price,
+            max_price=max_price,
+            condition=condition,
+            use_cache=not no_cache,
+        )
 
-        if not products:
-            display.print_warning("Nenhum produto encontrado.")
-            return []
+    if not listings:
+        display.print_warning("Nenhum produto encontrado.")
+        return []
 
-        listings: list[ProductListing]
-        if cep:
-            with console.status(f"[cyan]Calculando frete para CEP {cep}…[/cyan]"):
-                tasks = [scraper.get_shipping(p, cep, use_cache=not no_cache) for p in products]
-                listings = await asyncio.gather(*tasks)  # type: ignore[assignment]
-        else:
-            listings = [ProductListing(product=p) for p in products]
-
-        return _sort_listings(list(listings))
-    finally:
-        await scraper.close()
+    return listings
 
 
 # ---------------------------------------------------------------------------
