@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -15,10 +16,11 @@ from pydantic import BaseModel
 
 from pesquisa_produtos.models.product import ProductListing
 from pesquisa_produtos.scrapers.search import search_all
+from pesquisa_produtos.utils.cache import CacheManager
 
 
 # ---------------------------------------------------------------------------
-# Pydantic response models
+# Pydantic models
 # ---------------------------------------------------------------------------
 
 class ShippingOut(BaseModel):
@@ -65,6 +67,30 @@ class SearchRequest(BaseModel):
     cep: Optional[str] = None
 
 
+class DealsRequest(BaseModel):
+    categories: list[str] = []
+    max_price: Optional[float] = None
+    condition: Optional[str] = None   # "new" | "used" | "all" | None
+    sort: Optional[str] = None        # "price" | "discount" | "rating" | "free_shipping"
+    cep: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Category → queries mapping
+# ---------------------------------------------------------------------------
+
+CATEGORY_QUERIES: dict[str, list[str]] = {
+    "Eletrônicos":  ["fone de ouvido bluetooth", "monitor gamer"],
+    "Games":        ["teclado gamer", "headset gamer"],
+    "Casa":         ["airfryer", "aspirador robô"],
+    "Moda":         ["tênis masculino", "bolsa feminina"],
+    "Esportes":     ["whey protein", "bicicleta ergométrica"],
+    "Smartphones":  ["smartphone samsung", "celular xiaomi"],
+    "Livros":       ["livro best seller", "kindle"],
+    "Beleza":       ["perfume importado", "protetor solar"],
+}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -93,13 +119,34 @@ def _listing_to_out(listing: ProductListing) -> ListingOut:
     )
 
 
+def _dedup(items: list[ListingOut]) -> list[ListingOut]:
+    seen: set[str] = set()
+    out: list[ListingOut] = []
+    for item in items:
+        key = item.product.title[:30].lower().strip()
+        if key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+def _sort_deals(items: list[ListingOut], sort: Optional[str]) -> list[ListingOut]:
+    if sort == "free_shipping":
+        return sorted(items, key=lambda x: (not x.product.free_shipping, x.total))
+    if sort == "rating":
+        return sorted(items, key=lambda x: -(x.product.rating or 0))
+    if sort == "discount":
+        return sorted(items, key=lambda x: (x.product.promotion is None, x.total))
+    return sorted(items, key=lambda x: x.total)  # "price" é o padrão
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield  # scrapers são criados por requisição via search_all
+    yield
 
 
 app = FastAPI(title="Pesquisa Produtos", lifespan=lifespan)
@@ -126,7 +173,51 @@ async def search(body: SearchRequest):
         return JSONResponse(status_code=500, content={"detail": f"Erro ao buscar: {e}"})
 
     return SearchResponse(
-        query=query,
-        cep=cep or None,
+        query=query, cep=cep or None,
         results=[_listing_to_out(l) for l in listings],
     )
+
+
+@app.post("/deals", response_model=SearchResponse)
+async def deals(body: DealsRequest):
+    # Categorias → queries
+    categories = body.categories or list(CATEGORY_QUERIES.keys())[:3]
+    queries: list[str] = []
+    for cat in categories:
+        queries.extend(CATEGORY_QUERIES.get(cat, [])[:1])  # 1 query por categoria
+    queries = list(dict.fromkeys(queries))[:6]             # deduplica e limita a 6
+
+    cep = body.cep.strip().replace("-", "") if body.cep else None
+    if cep and (len(cep) != 8 or not cep.isdigit()):
+        cep = None
+
+    condition = body.condition if body.condition not in (None, "all") else None
+
+    shared_cache = CacheManager()
+    try:
+        tasks = [
+            search_all(
+                query=q,
+                limit_per_store=3,
+                cep=cep,
+                max_price=body.max_price,
+                condition=condition,
+                cache=shared_cache,
+            )
+            for q in queries
+        ]
+        results_per_query = await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Erro ao buscar ofertas: {e}"})
+
+    all_out: list[ListingOut] = []
+    for r in results_per_query:
+        if isinstance(r, Exception):
+            continue
+        all_out.extend(_listing_to_out(l) for l in r)
+
+    all_out = _dedup(all_out)
+    all_out = _sort_deals(all_out, body.sort)
+
+    label = ", ".join(categories)
+    return SearchResponse(query=label, cep=cep, results=all_out)
