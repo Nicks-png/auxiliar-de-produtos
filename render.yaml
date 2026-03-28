@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: pesquisa-produtos
+    runtime: python
+    buildCommand: pip install -e .
+    startCommand: uvicorn web.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: CACHE_DIR
+        value: /tmp
+      - key: CACHE_TTL_SECONDS
+        value: "1800"
+      - key: ML_ACCESS_TOKEN
+        sync: false
+      - key: ML_APP_ID
+        sync: false
+      - key: ML_APP_SECRET
+        sync: false

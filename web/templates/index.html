@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pesquisa Produtos — Comparador de Preços</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 0.8s linear infinite; }
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .card-hover { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 font-sans" x-data="searchApp()" x-cloak>
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header class="bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white py-12 px-4 text-center shadow-xl">
+    <div class="max-w-3xl mx-auto">
+      <div class="flex items-center justify-center gap-3 mb-3">
+        <svg class="w-9 h-9 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17
+               m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
+        </svg>
+        <h1 class="text-3xl sm:text-4xl font-bold tracking-tight">Pesquisa Produtos</h1>
+      </div>
+      <p class="text-blue-200 text-base sm:text-lg">
+        Compare preços no Mercado Livre e encontre o melhor negócio
+      </p>
+    </div>
+  </header>
+
+  <!-- ── Search form ────────────────────────────────────────────────────── -->
+  <div class="max-w-3xl mx-auto px-4 -mt-6">
+    <div class="bg-white rounded-2xl shadow-lg p-6">
+      <form @submit.prevent="doSearch()" class="flex flex-col sm:flex-row gap-3">
+        <input
+          type="text"
+          x-model="query"
+          placeholder="O que você quer comprar? Ex: notebook gamer"
+          class="flex-1 border border-slate-200 rounded-xl px-4 py-3 text-slate-800
+                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                 placeholder-slate-400 text-base"
+          :disabled="loading"
+          autocomplete="off"
+          autofocus
+        />
+        <input
+          type="text"
+          x-model="cep"
+          placeholder="CEP (opcional)"
+          maxlength="9"
+          class="w-full sm:w-36 border border-slate-200 rounded-xl px-4 py-3 text-slate-800
+                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                 placeholder-slate-400 text-base"
+          :disabled="loading"
+        />
+        <button
+          type="submit"
+          :disabled="loading || !query.trim()"
+          class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed
+                 text-white font-semibold px-6 py-3 rounded-xl transition-colors
+                 flex items-center gap-2 justify-center whitespace-nowrap"
+        >
+          <svg x-show="!loading" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <svg x-show="loading" class="w-5 h-5 spinner" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          <span x-text="loading ? 'Buscando…' : 'Buscar'"></span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Main content ───────────────────────────────────────────────────── -->
+  <main class="max-w-6xl mx-auto px-4 py-8">
+
+    <!-- Loading state -->
+    <div x-show="loading" class="text-center py-16">
+      <svg class="w-12 h-12 spinner text-blue-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      <p class="text-slate-500 text-lg">Buscando os melhores preços…</p>
+    </div>
+
+    <!-- Error banner -->
+    <div x-show="error && !loading" class="bg-red-50 border border-red-200 rounded-2xl p-6 mb-6">
+      <div class="flex gap-3">
+        <svg class="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4
+               c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <div>
+          <p class="font-semibold text-red-800 mb-1">Não foi possível buscar</p>
+          <p class="text-red-700 text-sm whitespace-pre-line" x-text="error"></p>
+          <p x-show="isAuthError"
+             class="mt-3 text-sm text-red-600 bg-red-100 rounded-lg px-3 py-2">
+            Configure as credenciais do Mercado Livre no arquivo
+            <code class="font-mono">.env</code> ou rode
+            <code class="font-mono">pesquisa-produtos setup</code> no terminal.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div x-show="searched && results.length === 0 && !loading && !error"
+         class="text-center py-16">
+      <svg class="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <p class="text-slate-500 text-lg font-medium">Nenhum produto encontrado</p>
+      <p class="text-slate-400 mt-1">Tente outros termos de busca</p>
+    </div>
+
+    <!-- Results header -->
+    <div x-show="results.length > 0 && !loading"
+         class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="text-xl font-bold text-slate-800">
+          Resultados para "<span x-text="lastQuery" class="text-blue-600"></span>"
+        </h2>
+        <p class="text-slate-500 text-sm mt-0.5">
+          <span x-text="results.length"></span> produtos encontrados
+          <span x-show="lastCep"> · CEP <span x-text="lastCep"></span></span>
+          · ordenados por menor total
+        </p>
+      </div>
+    </div>
+
+    <!-- Results grid -->
+    <div x-show="results.length > 0 && !loading"
+         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+      <template x-for="(item, index) in results" :key="item.product.id">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden card-hover flex flex-col">
+
+          <!-- Card top: thumbnail + badges -->
+          <div class="relative bg-slate-50 h-44 flex items-center justify-center p-3">
+            <img
+              :src="item.product.thumbnail.replace('http://', 'https://')"
+              :alt="item.product.title"
+              class="max-h-full max-w-full object-contain"
+              onerror="this.style.display='none'"
+            />
+            <!-- Best price badge -->
+            <span x-show="index === 0"
+                  class="absolute top-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+              Melhor preço
+            </span>
+            <!-- Condition badge -->
+            <span class="absolute top-2 left-2 text-xs font-medium px-2 py-1 rounded-full"
+                  :class="item.product.condition === 'new'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-amber-100 text-amber-700'"
+                  x-text="item.product.condition_label">
+            </span>
+          </div>
+
+          <!-- Card body -->
+          <div class="p-4 flex flex-col flex-1">
+
+            <!-- Title -->
+            <h3 class="text-sm font-medium text-slate-800 line-clamp-2 mb-1 leading-snug"
+                x-text="item.product.title"></h3>
+
+            <!-- Store + seller -->
+            <p class="text-xs text-slate-400 mb-3">
+              <span class="font-semibold text-blue-600" x-text="item.product.store"></span>
+              <span x-show="item.product.seller"> · <span x-text="item.product.seller"></span></span>
+            </p>
+
+            <!-- Pricing table -->
+            <div class="bg-slate-50 rounded-xl p-3 mb-3 space-y-1.5 text-sm">
+              <div class="flex justify-between">
+                <span class="text-slate-500">Preço</span>
+                <span class="font-semibold text-slate-800" x-text="item.product.price_brl"></span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-500">Frete</span>
+                <span :class="(item.cheapest_shipping && item.cheapest_shipping.is_free) || item.product.free_shipping
+                                ? 'text-green-600 font-semibold' : 'text-slate-700'"
+                      x-text="item.cheapest_shipping
+                                ? item.cheapest_shipping.display_cost
+                                : (item.product.free_shipping ? 'Grátis' : 'A consultar')">
+                </span>
+              </div>
+              <div class="flex justify-between" x-show="item.cheapest_shipping && item.cheapest_shipping.days > 0">
+                <span class="text-slate-500">Prazo</span>
+                <span class="text-slate-700" x-text="item.cheapest_shipping ? item.cheapest_shipping.display_days : ''"></span>
+              </div>
+              <div class="flex justify-between border-t border-slate-200 pt-1.5">
+                <span class="text-slate-600 font-medium">Total</span>
+                <span class="font-bold text-slate-900" x-text="item.total_brl"></span>
+              </div>
+            </div>
+
+            <!-- Promotion badge -->
+            <div x-show="item.product.promotion" class="mb-3">
+              <span class="inline-block bg-amber-100 text-amber-800 text-xs font-semibold px-3 py-1 rounded-full"
+                    x-text="item.product.promotion"></span>
+            </div>
+
+            <!-- Spacer -->
+            <div class="flex-1"></div>
+
+            <!-- CTA button -->
+            <a :href="item.product.url" target="_blank" rel="noopener noreferrer"
+               class="block w-full text-center bg-blue-600 hover:bg-blue-700 text-white
+                      font-semibold text-sm py-2.5 rounded-xl transition-colors mt-auto">
+              Ver produto →
+            </a>
+          </div>
+        </div>
+      </template>
+    </div>
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <footer class="text-center text-slate-400 text-sm py-8">
+    Pesquisa Produtos · Dados do Mercado Livre · Preços sujeitos a alteração
+  </footer>
+
+  <script>
+    function searchApp() {
+      return {
+        query: '',
+        cep: '',
+        loading: false,
+        results: [],
+        error: null,
+        isAuthError: false,
+        searched: false,
+        lastQuery: '',
+        lastCep: '',
+
+        async doSearch() {
+          const q = this.query.trim();
+          if (!q) return;
+
+          this.loading = true;
+          this.error = null;
+          this.isAuthError = false;
+          this.results = [];
+          this.searched = false;
+
+          try {
+            const resp = await fetch('/search', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: q, cep: this.cep.trim() || null }),
+            });
+
+            const data = await resp.json();
+
+            if (!resp.ok) {
+              this.error = data.detail || 'Erro desconhecido.';
+              this.isAuthError = resp.status === 401;
+            } else {
+              this.results = data.results;
+              this.lastQuery = data.query;
+              this.lastCep = data.cep || '';
+              this.searched = true;
+            }
+          } catch (e) {
+            this.error = 'Falha na conexão com o servidor.';
+          } finally {
+            this.loading = false;
+          }
+        }
+      }
+    }
+  </script>
+</body>
+</html>
