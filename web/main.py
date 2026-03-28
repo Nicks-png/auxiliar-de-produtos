@@ -141,12 +141,10 @@ async def search(body: SearchRequest, request: Request):
 
     try:
         products = await scraper.search(query, limit=12)
-    except PermissionError as e:
-        return JSONResponse(status_code=401, content={"detail": str(e)})
     except ConnectionError as e:
         return JSONResponse(status_code=429, content={"detail": str(e)})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"Erro inesperado: {e}"})
+        return JSONResponse(status_code=500, content={"detail": f"Erro ao buscar produtos: {e}"})
 
     if not products:
         return SearchResponse(query=query, cep=cep, results=[])

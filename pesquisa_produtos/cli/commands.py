@@ -125,9 +125,8 @@ def search(
         listings = asyncio.run(
             _run_search(query, limit, cep, no_cache, min_price, max_price, condition)
         )
-    except PermissionError as e:
+    except Exception as e:
         display.print_error(str(e))
-        console.print("\n[dim]Execute [bold]pesquisa-produtos setup[/bold] para configurar.[/dim]")
         raise typer.Exit(1)
 
     if not listings:

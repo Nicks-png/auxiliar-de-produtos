@@ -1,7 +1,6 @@
-"""Classe base abstrata para todos os scrapers/integrações de e-commerce."""
+"""Classe base abstrata para todos os scrapers de e-commerce (web scraping)."""
 from __future__ import annotations
 
-import os
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
@@ -11,10 +10,17 @@ from pesquisa_produtos.models.product import Product, ProductListing
 from pesquisa_produtos.utils.cache import CacheManager
 from pesquisa_produtos.utils.rate_limiter import RateLimiter
 
-DEFAULT_HEADERS = {
-    "User-Agent": "pesquisa-produtos/0.1.0",
-    "Accept-Language": "pt-BR,pt;q=0.9",
-    "Accept": "application/json",
+# Simula um browser real para evitar bloqueios
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "DNT": "1",
 }
 
 
@@ -25,7 +31,7 @@ class BaseScraper(ABC):
         self,
         cache: Optional[CacheManager] = None,
         rate_limiter: Optional[RateLimiter] = None,
-        requests_per_second: float = 2.0,
+        requests_per_second: float = 1.5,
     ) -> None:
         self.cache = cache or CacheManager()
         self.rate_limiter = rate_limiter or RateLimiter(requests_per_second)
@@ -34,46 +40,39 @@ class BaseScraper(ABC):
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
-                headers=DEFAULT_HEADERS,
-                timeout=httpx.Timeout(15.0, connect=5.0),
+                headers=BROWSER_HEADERS,
+                timeout=httpx.Timeout(20.0, connect=8.0),
                 follow_redirects=True,
             )
         return self._client
 
-    async def _request(
+    async def _fetch_html(
         self,
         url: str,
         params: Optional[dict] = None,
         extra_headers: Optional[dict] = None,
         use_cache: bool = True,
-    ) -> Any:
-        """GET com cache e rate limiting."""
+    ) -> str:
+        """GET que retorna HTML como texto, com cache e rate limiting."""
+        cache_url = url + "__html"
         if use_cache:
-            cached = self.cache.get(url, params)
+            cached = self.cache.get(cache_url, params)
             if cached is not None:
-                return cached
+                return cached  # type: ignore[return-value]
 
         await self.rate_limiter.wait()
         client = await self._get_client()
-        headers = extra_headers or {}
-        response = client.build_request("GET", url, params=params, headers=headers)
-        resp = await client.send(response)
+        req = client.build_request("GET", url, params=params, headers=extra_headers or {})
+        resp = await client.send(req)
 
-        if resp.status_code == 403:
-            raise PermissionError(
-                f"API retornou 403 Forbidden para {url}. "
-                "Configure ML_ACCESS_TOKEN no arquivo .env para autenticar."
-            )
         if resp.status_code == 429:
-            raise ConnectionError("Rate limit atingido. Aguarde alguns segundos e tente novamente.")
-
+            raise ConnectionError("Rate limit atingido. Tente novamente em alguns segundos.")
         resp.raise_for_status()
-        data = resp.json()
 
+        text = resp.text
         if use_cache:
-            self.cache.set(url, data, params)
-
-        return data
+            self.cache.set(cache_url, text, params)
+        return text
 
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
